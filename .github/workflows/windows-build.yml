@@ -26,7 +26,13 @@ jobs:
           pip install -r requirements.txt
 
       - name: Generate samples
-        run: python samples\generate_samples.py
+        shell: pwsh
+        run: |
+          if (Test-Path "samples\generate_samples.py") {
+            python samples\generate_samples.py
+          } else {  
+            Write-Host "samples\generate_samples.py not found. Skipping sample generation."
+          }
 
       - name: Run tests
         run: python -m unittest discover -s app\tests
