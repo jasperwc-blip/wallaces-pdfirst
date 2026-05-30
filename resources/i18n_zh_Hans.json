@@ -1,0 +1,11 @@
+{
+  "app_title": "Wallace's PDFirst",
+  "image_pdf": "图片转 PDF",
+  "transcript": "转写稿转 Word/PDF",
+  "merge": "合并 PDF",
+  "split": "拆分 PDF",
+  "rotate": "旋转 PDF",
+  "watermark": "添加水印",
+  "settings": "设置",
+  "about": "关于"
+}

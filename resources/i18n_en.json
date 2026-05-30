@@ -1,0 +1,11 @@
+{
+  "app_title": "Wallace's PDFirst",
+  "image_pdf": "Image to PDF",
+  "transcript": "Transcript to Word/PDF",
+  "merge": "Merge PDF",
+  "split": "Split PDF",
+  "rotate": "Rotate PDF",
+  "watermark": "Add Watermark",
+  "settings": "Settings",
+  "about": "About"
+}
