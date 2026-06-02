@@ -5,7 +5,12 @@
   "merge": "合併 PDF",
   "split": "分割 PDF",
   "rotate": "旋轉 PDF",
+  "pdf_word": "PDF 轉 Word/PPT",
   "watermark": "加入浮水印",
   "settings": "設定",
-  "about": "關於"
+  "about": "關於",
+  "language": "語言",
+  "save_settings": "儲存設定",
+  "settings_saved": "本次工作階段的設定已保留。",
+  "settings_note": "選擇應用程式顯示語言。文件處理預設在本機進行。"
 }

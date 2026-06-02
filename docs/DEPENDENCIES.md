@@ -9,7 +9,7 @@ Runtime/build dependencies are listed in `requirements.txt`.
 - Pillow: image processing.
 - python-docx: DOCX output.
 - reportlab: PDF generation and watermark overlays.
-- PyInstaller: portable Windows packaging.
+- PyInstaller: portable Windows packaging and macOS `.app` packaging.
 
 ## Dependency Notices
 

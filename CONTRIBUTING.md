@@ -30,10 +30,18 @@ Build portable release:
 build_portable.bat
 ```
 
+Build macOS portable release on macOS:
+
+```bash
+chmod +x macos/build_macos.sh
+./macos/build_macos.sh
+```
+
 ## Pull Request Checklist
 
 - Tests pass.
 - Portable build completes on Windows.
+- macOS build still completes when macOS packaging files are changed.
 - New user-facing labels are clear.
 - README/docs are updated when behavior changes.
 - No generated folders are committed.

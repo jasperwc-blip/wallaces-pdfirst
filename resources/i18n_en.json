@@ -5,7 +5,12 @@
   "merge": "Merge PDF",
   "split": "Split PDF",
   "rotate": "Rotate PDF",
+  "pdf_word": "PDF to Word/PPT",
   "watermark": "Add Watermark",
   "settings": "Settings",
-  "about": "About"
+  "about": "About",
+  "language": "Language",
+  "save_settings": "Save Settings",
+  "settings_saved": "Settings kept for this session.",
+  "settings_note": "Choose the display language for the app. Document processing remains local by default."
 }

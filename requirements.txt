@@ -4,3 +4,8 @@ Pillow==10.4.0
 python-docx==1.1.2
 reportlab==4.2.5
 PyInstaller==6.11.1
+numpy==1.26.4
+PyMuPDF==1.24.13
+pdf2docx==0.5.8
+pytesseract==0.3.13
+python-pptx==1.0.2

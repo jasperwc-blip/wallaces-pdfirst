@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from docx import Document
+from PIL import Image, ImageDraw, ImageFont
+from pptx import Presentation
 from pypdf import PdfReader
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -22,6 +25,19 @@ from app.services.pdf_ops import (
     split_pdf_by_mode,
     split_pdf_by_range_text,
 )
+from app.services.pdf_to_word import (
+    IMAGE_BASED_EDITABLE_WARNING,
+    MODE_EDITABLE,
+    MODE_OCR,
+    MODE_PPTX,
+    MODE_SIMPLE,
+    OCR_NOT_ENABLED_MESSAGE,
+    SCANNED_PDF_MESSAGE,
+    convert_pdf_to_docx,
+    find_tesseract_executable,
+    get_ocr_availability,
+)
+from app.services.pdf_to_pptx import convert_pdf_to_pptx
 from app.services.transcript import parse_transcript, transcript_to_docx, transcript_to_pdf
 from app.services.watermark_removal import remove_image_watermark_rectangles
 from app.services.worksheet import clean_worksheet_pdf
@@ -65,6 +81,98 @@ class WorkflowTests(unittest.TestCase):
         pdf = transcript_to_pdf(vtt, self.root / "out.pdf", keep_timestamps=True)
         self.assertTrue(docx.exists())
         self.assertEqual(len(PdfReader(str(pdf)).pages), 1)
+
+    def test_pdf_to_word_editable_layout_mode(self) -> None:
+        source = self._pdf("readable.pdf", 2)
+        output = self.root / "readable.docx"
+        result = convert_pdf_to_docx(source, output, MODE_EDITABLE)
+        self.assertTrue(result.success, result.message)
+        self.assertEqual(result.pages_processed, 2)
+        self.assertGreater(result.extracted_character_count, 0)
+        text = "\n".join(paragraph.text for paragraph in Document(str(output)).paragraphs)
+        self.assertIn("readable.pdf page 1", text)
+
+    def test_pdf_to_word_accepts_output_folder(self) -> None:
+        source = self._pdf("folder_output.pdf", 1)
+        output_folder = self.root / "word_outputs"
+        output_folder.mkdir()
+        result = convert_pdf_to_docx(source, output_folder, MODE_EDITABLE)
+        expected = output_folder / "folder_output.docx"
+        self.assertTrue(result.success, result.message)
+        self.assertEqual(Path(result.output_path), expected)
+        self.assertTrue(expected.exists())
+
+    def test_pdf_to_word_simple_text_mode(self) -> None:
+        source = self._pdf("simple.pdf", 2)
+        output = self.root / "simple.docx"
+        result = convert_pdf_to_docx(source, output, MODE_SIMPLE)
+        self.assertTrue(result.success, result.message)
+        text = "\n".join(paragraph.text for paragraph in Document(str(output)).paragraphs)
+        self.assertIn("simple.pdf page 1", text)
+        self.assertIn("Page 2", text)
+
+    def test_pdf_to_word_scanned_pdf_warning(self) -> None:
+        source = self._image_only_pdf()
+        output = self.root / "scanned.docx"
+        result = convert_pdf_to_docx(source, output, MODE_SIMPLE)
+        self.assertFalse(result.success)
+        self.assertEqual(result.message, SCANNED_PDF_MESSAGE)
+        self.assertFalse(output.exists())
+        editable = convert_pdf_to_docx(source, self.root / "scanned_editable.docx", MODE_EDITABLE)
+        self.assertFalse(editable.success)
+        self.assertEqual(editable.message, IMAGE_BASED_EDITABLE_WARNING)
+
+    def test_pdf_to_word_page_ranges_and_ocr_option(self) -> None:
+        source = self._pdf("ranges.pdf", 3)
+        output = self.root / "range.docx"
+        result = convert_pdf_to_docx(source, output, MODE_SIMPLE, "2-3")
+        self.assertTrue(result.success, result.message)
+        self.assertEqual(result.pages_processed, 2)
+        text = "\n".join(paragraph.text for paragraph in Document(str(output)).paragraphs)
+        self.assertNotIn("ranges.pdf page 1", text)
+        self.assertIn("ranges.pdf page 2", text)
+        ocr = convert_pdf_to_docx(source, self.root / "ocr.docx", MODE_OCR, "1-1")
+        if not ocr.success:
+            self.assertIn(OCR_NOT_ENABLED_MESSAGE, ocr.message)
+            self.assertFalse((self.root / "ocr.docx").exists())
+
+    def test_pdf_to_word_ocr_scanned_pdf(self) -> None:
+        source = self._image_only_pdf("OCR TEST WALLACE PDFIRST")
+        output = self.root / "scanned_ocr.docx"
+        result = convert_pdf_to_docx(source, output, MODE_OCR, "1-end", "English")
+        self.assertTrue(result.success, result.message)
+        self.assertGreater(result.extracted_character_count, 0)
+        text = "\n".join(paragraph.text for paragraph in Document(str(output)).paragraphs)
+        self.assertIn("OCR TEST", text)
+
+    def test_bundled_ocr_detection(self) -> None:
+        ocr_available, message = get_ocr_availability()
+        self.assertTrue(ocr_available, message)
+        executable = find_tesseract_executable()
+        self.assertIsNotNone(executable)
+        self.assertTrue((executable.parent / "tessdata" / "eng.traineddata").exists())
+        self.assertTrue((executable.parent / "tessdata" / "chi_sim.traineddata").exists())
+        self.assertTrue((executable.parent / "tessdata" / "chi_tra.traineddata").exists())
+
+    def test_pdf_to_pptx_visual_conversion(self) -> None:
+        source = self._pdf("slides.pdf", 3)
+        output = self.root / "slides.pptx"
+        result = convert_pdf_to_pptx(source, output, "1-2")
+        self.assertTrue(result.success, result.message)
+        self.assertTrue(output.exists())
+        self.assertGreater(result.extracted_character_count, 0)
+        presentation = Presentation(str(output))
+        self.assertEqual(len(presentation.slides), 2)
+        first_slide = presentation.slides[0]
+        pictures = [shape for shape in first_slide.shapes if shape.shape_type == 13]
+        self.assertGreaterEqual(len(pictures), 1)
+        self.assertEqual(first_slide.shapes[-1].shape_type, 13)
+        self.assertEqual(first_slide.shapes[-1].left, 0)
+        self.assertEqual(first_slide.shapes[-1].top, 0)
+        self.assertEqual(first_slide.shapes[-1].width, presentation.slide_width)
+        self.assertEqual(first_slide.shapes[-1].height, presentation.slide_height)
+        slide_text = "\n".join(shape.text for slide in presentation.slides for shape in slide.shapes if hasattr(shape, "text"))
+        self.assertIn("slides.pdf page 1", slide_text)
 
     def test_pdf_merge_split_rotate(self) -> None:
         pdfs = [self._pdf(f"p{i}.pdf", i) for i in (1, 2, 3)]
@@ -114,6 +222,68 @@ class WorkflowTests(unittest.TestCase):
         marked = create_marked_pdf(student_pdf, results, self.root / "marked.pdf")
         self.assertEqual(len(PdfReader(str(marked)).pages), 1)
 
+    def test_sidebar_order_and_about_version(self) -> None:
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication, QComboBox, QLabel
+        from app.ui.main_window import MainWindow
+
+        app = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        labels = [window.nav.item(i).text() for i in range(window.nav.count())]
+        self.assertEqual(
+            labels,
+            [
+                "Split PDF",
+                "Merge PDF",
+                "Rotate PDF",
+                "PDF to Word/PPT",
+                "Transcript to Word/PDF",
+                "Image to PDF",
+                "Add Watermark",
+                "Settings",
+                "About",
+            ],
+        )
+        about = window.stack.widget(labels.index("About")).findChildren(QLabel)
+        about_text = "\n".join(label.text() for label in about)
+        pdf_to_word_page = window.stack.widget(labels.index("PDF to Word/PPT"))
+        mode_selector = pdf_to_word_page.findChild(QComboBox, "PdfToWordMode")
+        self.assertIsNotNone(mode_selector)
+        self.assertEqual(mode_selector.currentText(), MODE_EDITABLE)
+        self.assertEqual([mode_selector.itemText(i) for i in range(mode_selector.count())], [MODE_EDITABLE, MODE_OCR, MODE_SIMPLE, MODE_PPTX])
+        ocr_available, _ = get_ocr_availability()
+        mode_selector.setCurrentText(MODE_OCR)
+        if not ocr_available:
+            self.assertFalse(pdf_to_word_page.run_button.isEnabled())
+        self.assertIn("layout-preserving PDF-to-Word/PPT conversion", about_text)
+        self.assertIn("PDF to Word/PPT note:", about_text)
+        self.assertIn("Version: 1.0.1 Portable", about_text)
+        settings_page = window.stack.widget(labels.index("Settings"))
+        language_selector = settings_page.findChild(QComboBox, "LanguageSelector")
+        self.assertIsNotNone(language_selector)
+        self.assertEqual([language_selector.itemText(i) for i in range(language_selector.count())], ["English", "Simplified Chinese", "Traditional Chinese"])
+        window.close()
+        _ = app
+
+    def test_no_ocr_portable_hides_ocr_pdf_mode(self) -> None:
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        os.environ["WALLACES_PDFIRST_NO_OCR"] = "1"
+        from PySide6.QtWidgets import QApplication, QComboBox
+        from app.ui.main_window import MainWindow
+
+        app = QApplication.instance() or QApplication([])
+        try:
+            window = MainWindow()
+            labels = [window.nav.item(i).text() for i in range(window.nav.count())]
+            pdf_to_word_page = window.stack.widget(labels.index("PDF to Word/PPT"))
+            mode_selector = pdf_to_word_page.findChild(QComboBox, "PdfToWordMode")
+            self.assertIsNotNone(mode_selector)
+            self.assertEqual([mode_selector.itemText(i) for i in range(mode_selector.count())], [MODE_EDITABLE, MODE_SIMPLE, MODE_PPTX])
+            window.close()
+        finally:
+            os.environ.pop("WALLACES_PDFIRST_NO_OCR", None)
+        _ = app
+
     def _pdf(self, name: str, pages: int) -> Path:
         path = self.root / name
         c = canvas.Canvas(str(path), pagesize=A4)
@@ -129,6 +299,24 @@ class WorkflowTests(unittest.TestCase):
         draw = ImageDraw.Draw(img)
         draw.text((20, 20), f"Image {index}", fill="white")
         img.save(path)
+        return path
+
+    def _image_only_pdf(self, text: str = "Image 123") -> Path:
+        image = self.root / "scan_image.png"
+        img = Image.new("RGB", (1800, 900), "white")
+        draw = ImageDraw.Draw(img)
+        try:
+            font = ImageFont.truetype("arial.ttf", 82)
+        except Exception:
+            font = ImageFont.load_default()
+        draw.text((100, 180), text, fill="black", font=font)
+        draw.text((100, 340), "Scanned document sample", fill="black", font=font)
+        img.save(image)
+        path = self.root / "image_only.pdf"
+        c = canvas.Canvas(str(path), pagesize=A4)
+        c.drawImage(str(image), 72, 500, width=300, height=180)
+        c.showPage()
+        c.save()
         return path
 
     def _pdf_with_annotation(self) -> Path:

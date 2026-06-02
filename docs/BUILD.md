@@ -1,6 +1,6 @@
 # Build Guide
 
-## Requirements
+## Windows Requirements
 
 - Windows 10 or Windows 11.
 - Python 3.11 or 3.12 for development/building.
@@ -8,46 +8,57 @@
 
 End users of the portable build do not need Python installed.
 
-## Build Command
+## Release Build Command
+
+For Wallace's PDFirst v1.0.1:
 
 ```bat
-build_portable.bat
+build_portable_v1.0.1.bat
 ```
 
 The script:
 
-1. Cleans `build` and `dist`.
+1. Cleans the v1.0.1 build and staging folders.
 2. Creates or verifies `.venv-build`.
 3. Installs dependencies from `requirements.txt`.
 4. Runs automated tests.
 5. Builds the app with PyInstaller.
-6. Copies README, resources, and third-party notices.
+6. Copies README and third-party notices.
+7. Prunes unused OCR language/training files.
+8. Creates the release-ready OCR-enabled portable folder.
 
-## Output
+## Windows Outputs
 
 ```text
-dist\Wallace's PDFirst\Wallace's PDFirst.exe
+dist\Wallace's_PDFirst_v1.0.1\Wallaces_PDFirst.exe
 ```
 
-Distribute the entire `dist\Wallace's PDFirst` folder.
+Distribute the entire `Wallace's_PDFirst_v1.0.1` folder.
 
-## Build Notes
+## OCR Build Difference
 
-PyInstaller uses the internal safe name `Wallaces_PDFirst`, then the build script renames the output folder and executable to `Wallace's PDFirst`.
+`Wallace's_PDFirst_v1.0.1` includes:
 
-This avoids quoting problems caused by the apostrophe in the public app name.
+- bundled Tesseract OCR runtime;
+- English OCR data;
+- Simplified Chinese OCR data;
+- Traditional Chinese OCR data.
+
+The public v1.0.1 release uses the OCR-enabled folder. Any local `Excl_OCR` build is not part of the public release package.
 
 ## Clean Build
 
 ```bat
-rmdir /s /q build
-rmdir /s /q dist
-build_portable.bat
+rmdir /s /q build-v1.0.1
+rmdir /s /q "dist\Wallace's_PDFirst_v1.0.1"
+build_portable_v1.0.1.bat
 ```
 
 ## Font and Interface Compatibility
 
-The app sets Windows-safe UI fallbacks:
+The app sets platform-safe UI fallbacks.
+
+On Windows:
 
 - Segoe UI
 - Microsoft JhengHei UI
@@ -55,3 +66,9 @@ The app sets Windows-safe UI fallbacks:
 - Arial
 
 These fonts are broadly available on Windows and support English, Traditional Chinese, and Simplified Chinese labels.
+
+## Legacy and macOS Notes
+
+`build_portable.bat` and `build_portable_v1.0.2.bat` may exist in the repository history, but the release-ready Windows v1.0.1 build is produced by `build_portable_v1.0.1.bat`.
+
+macOS build notes are retained separately in `docs/MACOS_BUILD.md`. The current release-ready deliverable described here is the Windows portable v1.0.1 build.

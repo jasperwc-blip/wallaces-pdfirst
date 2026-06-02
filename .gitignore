@@ -9,11 +9,16 @@ __pycache__/
 # Local virtual environments
 .venv/
 .venv-build/
+.venv-macos-build/
 venv/
 
 # Build outputs
 build/
+build-v1.0.1/
+build-v1.0.2/
+build-macos/
 dist/
+dist-macos/
 *.spec
 
 # Local output/test artifacts
@@ -25,4 +30,3 @@ output/
 Thumbs.db
 .idea/
 .vscode/
-

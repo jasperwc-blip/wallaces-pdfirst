@@ -1,4 +1,6 @@
 from __future__ import annotations
+import os
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -33,8 +35,13 @@ from app.services.pdf_ops import (
     rotate_pdf,
     split_pdf_by_mode,
 )
+from app.services.pdf_to_word import MODE_EDITABLE, MODE_OCR, MODE_PPTX, MODE_SIMPLE, convert_pdf_to_docx, get_ocr_availability
 from app.services.transcript import transcript_to_docx, transcript_to_pdf
 from app.ui.i18n import Translator
+from app.version import APP_VERSION_LABEL
+
+
+NO_OCR_MARKER = "NO_OCR_PORTABLE"
 
 
 def _watermark_color(name: str) -> tuple[float, float, float]:
@@ -44,6 +51,18 @@ def _watermark_color(name: str) -> tuple[float, float, float]:
         "Blue": (0.05, 0.2, 0.8),
         "Red": (0.8, 0, 0),
     }.get(name, (0.8, 0, 0))
+
+
+def _ocr_pdf_mode_disabled() -> bool:
+    if os.environ.get("WALLACES_PDFIRST_NO_OCR") == "1":
+        return True
+    if getattr(sys, "frozen", False):
+        return (Path(sys.executable).resolve().parent / NO_OCR_MARKER).exists()
+    return (_project_root() / NO_OCR_MARKER).exists()
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
 
 
 class DropList(QListWidget):
@@ -108,9 +127,9 @@ class ModulePage(QWidget):
         self.down_button = QPushButton("Move Down")
 
         root = QVBoxLayout(self)
-        heading = QLabel(title)
-        heading.setObjectName("ModuleTitle")
-        root.addWidget(heading)
+        self.title_label = QLabel(title)
+        self.title_label.setObjectName("ModuleTitle")
+        root.addWidget(self.title_label)
         root.addWidget(QLabel("Drop files here or add them manually. Processing is local by default."))
         root.addWidget(self.files)
 
@@ -167,8 +186,10 @@ class ModulePage(QWidget):
             self.add_status("Processing started.")
             self.progress.setValue(10)
             result = action()
+            if hasattr(result, "success") and not result.success:
+                raise ValueError(result.message)
             self.progress.setValue(100)
-            self.add_status(f"Done: {result}")
+            self.add_status(f"Done: {getattr(result, 'message', result)}")
         except Exception as exc:
             self.progress.setValue(0)
             self.add_status(f"Error: {exc}")
@@ -194,6 +215,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.trn = Translator("en")
+        self.page_keys: list[str] = []
         self.setWindowTitle(self.trn.t("app_title"))
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -222,14 +244,20 @@ class MainWindow(QMainWindow):
 
     def _add_page(self, key: str, page: QWidget) -> None:
         self.nav.addItem(self.trn.t(key))
+        self.page_keys.append(key)
+        page.setProperty("navKey", key)
+        title_label = getattr(page, "title_label", None)
+        if isinstance(title_label, QLabel):
+            title_label.setText(f"{self.trn.t('about')} Wallace's PDFirst" if key == "about" else self.trn.t(key))
         self.stack.addWidget(page)
 
     def _build_pages(self) -> None:
         self._add_page("split", self._split_page())
         self._add_page("merge", self._merge_page())
-        self._add_page("image_pdf", self._image_page())
         self._add_page("rotate", self._rotate_page())
+        self._add_page("pdf_word", self._pdf_to_word_page())
         self._add_page("transcript", self._transcript_page())
+        self._add_page("image_pdf", self._image_page())
         self._add_page("watermark", self._watermark_page())
         self._add_page("settings", self._settings_page())
         self._add_page("about", self._about_page())
@@ -298,6 +326,55 @@ class MainWindow(QMainWindow):
                 grouping.isChecked(),
             )
 
+        page.run_button.clicked.connect(lambda: page.run_safely(run))
+        return page
+
+    def _pdf_to_word_page(self) -> ModulePage:
+        page = ModulePage("PDF to Word/PPT", self.add_log)
+        page.output.setText(str(Path.cwd() / "output" / "converted.docx"))
+        mode = QComboBox()
+        mode.setObjectName("PdfToWordMode")
+        no_ocr_portable = _ocr_pdf_mode_disabled()
+        mode.addItems([MODE_EDITABLE, MODE_SIMPLE, MODE_PPTX] if no_ocr_portable else [MODE_EDITABLE, MODE_OCR, MODE_SIMPLE, MODE_PPTX])
+        ranges = QLineEdit("1-end")
+        ocr_language = QComboBox()
+        ocr_language.addItems(["English", "Simplified Chinese", "Traditional Chinese", "English + Simplified Chinese", "English + Traditional Chinese"])
+        ocr_available, ocr_message = (False, "OCR PDF mode is excluded from this portable build.") if no_ocr_portable else get_ocr_availability()
+        note = QLabel(
+            "Editable mode aims to preserve text, tables, images and layout. OCR PDF mode is for scanned PDFs, "
+            "Simple mode extracts text only. PDF to PPTX creates editable PowerPoint text boxes where PDF text can be extracted."
+        )
+        note.setWordWrap(True)
+        ocr_status = QLabel("" if ocr_available else f"OCR status: unavailable. {ocr_message}")
+        ocr_status.setObjectName("PdfToWordOcrStatus")
+        ocr_status.setWordWrap(True)
+        page.options.addRow("Conversion mode", mode)
+        page.options.addRow("Pages", ranges)
+        if not no_ocr_portable:
+            page.options.addRow("OCR language", ocr_language)
+        page.options.addRow("Note", note)
+        if not ocr_available:
+            page.options.addRow("", ocr_status)
+
+        def run():
+            paths = page.files.paths()
+            if not paths:
+                raise ValueError("Please select one PDF file.")
+            return convert_pdf_to_docx(paths[0], page.output.text(), mode.currentText(), ranges.text(), ocr_language.currentText())
+
+        def update_mode_state(text: str) -> None:
+            blocked = text == MODE_OCR and not ocr_available
+            page.run_button.setEnabled(not blocked)
+            ocr_language.setEnabled(text == MODE_OCR)
+            if text == MODE_PPTX and not page.output.text().lower().endswith(".pptx"):
+                page.output.setText(str(Path.cwd() / "output" / "converted.pptx"))
+            elif text != MODE_PPTX and not page.output.text().lower().endswith(".docx"):
+                page.output.setText(str(Path.cwd() / "output" / "converted.docx"))
+            if blocked:
+                page.add_status("OCR PDF mode is unavailable because no Tesseract OCR engine is bundled or detected.")
+
+        mode.currentTextChanged.connect(update_mode_state)
+        update_mode_state(mode.currentText())
         page.run_button.clicked.connect(lambda: page.run_safely(run))
         return page
 
@@ -412,27 +489,46 @@ class MainWindow(QMainWindow):
         page.run_button.clicked.connect(lambda: page.run_safely(run))
         return page
 
-    def _settings_page(self) -> ModulePage:
-        page = ModulePage("Settings", self.add_log)
+    def _settings_page(self) -> QWidget:
+        page = QWidget()
+        root = QVBoxLayout(page)
+        page.title_label = QLabel(self.trn.t("settings"))
+        page.title_label.setObjectName("ModuleTitle")
+        root.addWidget(page.title_label)
+        page.settings_note = QLabel(self.trn.t("settings_note"))
+        page.settings_note.setWordWrap(True)
+        root.addWidget(page.settings_note)
+
+        options_box = QFrame()
+        options_box.setObjectName("OptionsBox")
+        options = QFormLayout(options_box)
         language = QComboBox()
-        language.addItems(["English", "Traditional Chinese", "Simplified Chinese"])
-        privacy = QCheckBox("Privacy mode: process files locally unless optional API mode is explicitly enabled")
-        privacy.setChecked(True)
-        api = QLineEdit()
-        api.setEchoMode(QLineEdit.Password)
-        page.options.addRow("Language", language)
-        page.options.addRow("", privacy)
-        page.options.addRow("Optional OpenAI API key", api)
-        page.run_button.setText("Save Settings")
-        page.run_button.clicked.connect(lambda: self.add_log("Settings kept for this session."))
+        language.setObjectName("LanguageSelector")
+        language.addItem("English", "en")
+        language.addItem("Simplified Chinese", "zh_Hans")
+        language.addItem("Traditional Chinese", "zh_Hant")
+        page.language_label = QLabel(self.trn.t("language"))
+        options.addRow(page.language_label, language)
+        root.addWidget(options_box)
+
+        page.save_button = QPushButton(self.trn.t("save_settings"))
+        root.addWidget(page.save_button)
+        root.addStretch(1)
+
+        def apply_language() -> None:
+            self._set_language(language.currentData())
+            self.add_log(self.trn.t("settings_saved"))
+
+        page.save_button.clicked.connect(apply_language)
+        page.language_selector = language
         return page
 
     def _about_page(self) -> QWidget:
         page = QWidget()
         root = QVBoxLayout(page)
-        heading = QLabel("About Wallace's PDFirst")
-        heading.setObjectName("ModuleTitle")
-        root.addWidget(heading)
+        page.title_label = QLabel("About Wallace's PDFirst")
+        page.title_label.setObjectName("ModuleTitle")
+        root.addWidget(page.title_label)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -441,17 +537,24 @@ class MainWindow(QMainWindow):
         content = QLabel(
             "About Wallace's PDFirst\n\n"
             "Wallace's PDFirst is a portable Windows desktop application designed for practical document workflows, "
-            "including PDF splitting, merging, rotation, image-to-PDF conversion, transcript conversion, and watermarking.\n\n"
-            "The application was conceived by Wallace, a non-programmer, an AI enthusiast, and a Hong Kong listed-company "
-            "governance and compliance professional.\n\n"
+            "including PDF splitting, merging, rotation, layout-preserving PDF-to-Word/PPT conversion, image-to-PDF conversion, "
+            "transcript conversion, and watermarking.\n\n"
+            "The application was conceived by Wallace, a non-programmer, AI enthusiast, and Hong Kong listed-company "
+            "governance and compliance professional. It reflects a practical objective: using AI-assisted development "
+            "to create simple, useful tools for real document work.\n\n"
             "This app is built around a simple principle: important document work should be fast, traceable, "
             "privacy-conscious, and easy to perform without complicated installation.\n\n"
             "Key principles:\n\n"
             "* Portable: open directly from the .exe file.\n"
-            "* Practical: built for real PDF, worksheet, and transcript workflows.\n"
+            "* Practical: built for real PDF, worksheet, image, and transcript workflows.\n"
             "* Local-first: core functions are processed on the user's computer.\n"
             "* Reviewable: advanced functions should allow user preview and manual checking.\n"
             "* Responsible: users should only process files they own or are authorized to modify.\n\n"
+            "PDF to Word/PPT note:\n"
+            "PDF to Word/PPT conversion aims to balance editable content and document structure. Editable mode aims "
+            "to preserve text, tables, images, and layout where practical. OCR PDF mode is intended for scanned PDFs "
+            "when a supported OCR engine is available. Perfect conversion is not guaranteed "
+            "because PDF and Word use different layout models.\n\n"
             "Support this project:\n"
             "If you find Wallace's PDFirst useful, please support the project by starring the GitHub repository. "
             "Your star helps encourage further development, improvements, and new practical features.\n\n"
@@ -459,14 +562,14 @@ class MainWindow(QMainWindow):
             "Wallace's PDFirst is provided as a practical document-processing tool. It is not legal, professional, "
             "academic, or examination advice. Users are responsible for checking the accuracy, completeness, legality, "
             "and suitability of all output files before use, submission, publication, or distribution.\n\n"
-            "Document-editing features must only be used on files that the user owns, has created, or is legally authorized "
-            "to modify. The application must not be used to remove copyright notices, ownership marks, third-party attribution, "
-            "anti-piracy marks, or other protected identifiers without proper authorization.\n\n"
+            "AI-assisted or automated functions, if enabled in future versions, may produce incomplete or inaccurate results. "
+            "Users should manually review all outputs, especially for worksheet cleaning, answer extraction, exam marking, "
+            "scoring, and document redaction.\n\n"
             "Copyright:\n"
             "Copyright (c) 2026 Wallace. All rights reserved unless otherwise stated in the applicable repository license.\n\n"
             "No patent, registered trademark, or exclusive statutory intellectual property right is claimed unless expressly stated. "
             "Product names, third-party libraries, file formats, and trademarks belong to their respective owners.\n\n"
-            "Version: 1.0 Portable\n"
+            f"Version: {APP_VERSION_LABEL}\n"
             "Developer / Concept: Wallace\n"
             "GitHub: Please star the repository if you like this project."
         )
@@ -479,6 +582,31 @@ class MainWindow(QMainWindow):
         root.addWidget(scroll, 1)
         return page
 
+    def _set_language(self, language_code: str) -> None:
+        if language_code not in {"en", "zh_Hans", "zh_Hant"}:
+            language_code = "en"
+        self.trn.language = language_code
+        self.setWindowTitle(self.trn.t("app_title"))
+        for index, key in enumerate(self.page_keys):
+            self.nav.item(index).setText(self.trn.t(key))
+            page = self.stack.widget(index)
+            title_label = getattr(page, "title_label", None)
+            if isinstance(title_label, QLabel):
+                if key == "about":
+                    title_label.setText(f"{self.trn.t('about')} Wallace's PDFirst")
+                else:
+                    title_label.setText(self.trn.t(key))
+            if key == "settings":
+                note = getattr(page, "settings_note", None)
+                if isinstance(note, QLabel):
+                    note.setText(self.trn.t("settings_note"))
+                language_label = getattr(page, "language_label", None)
+                if isinstance(language_label, QLabel):
+                    language_label.setText(self.trn.t("language"))
+                save_button = getattr(page, "save_button", None)
+                if isinstance(save_button, QPushButton):
+                    save_button.setText(self.trn.t("save_settings"))
+
     def _file_row(self, target: QLineEdit, file_filter: str) -> QWidget:
         browse = QPushButton("Browse")
         browse.clicked.connect(lambda: self._choose_file(target, file_filter))
@@ -486,6 +614,15 @@ class MainWindow(QMainWindow):
         row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(target)
         row.addWidget(browse)
+        widget = QWidget()
+        widget.setLayout(row)
+        return widget
+
+    def _line_with_button(self, target: QLineEdit, button: QPushButton) -> QWidget:
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(target)
+        row.addWidget(button)
         widget = QWidget()
         widget.setLayout(row)
         return widget
@@ -498,7 +635,7 @@ class MainWindow(QMainWindow):
     def _apply_style(self) -> None:
         self.setStyleSheet(
             """
-            * { font-family: "Segoe UI", "Microsoft JhengHei UI", "Microsoft YaHei UI", "Arial", sans-serif; }
+            * { font-family: ".AppleSystemUIFont", "Helvetica Neue", "Segoe UI", "Microsoft JhengHei UI", "Microsoft YaHei UI", "Arial", sans-serif; }
             QWidget { background: #f6f7f9; color: #111827; }
             QMainWindow { background: #f6f7f9; color: #111827; }
             QLabel { color: #111827; background: transparent; }
